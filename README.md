@@ -1,2 +1,2 @@
 # oMigrate
-Pod &amp; Container migration script for podman
+Pod & Container migration script for podman built in python.
