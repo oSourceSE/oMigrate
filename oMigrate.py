@@ -4,8 +4,8 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.1                                                #
-# Date: 2024-04-08                                              #
+# Version: 1.3.2                                                #
+# Date: 2024-04-12                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
 # Command: pip3 install paramiko                                #
@@ -14,6 +14,7 @@
 ## Common parameters.
 
 vMigrateDir: str = ""          # Where to put the files during migration for further processing, must be same path at receiving server.
+vCleanMigrateDir: str = "No"   # Should we automatically clean the migration folder when done?
 vEnvDir: str = ""              # Where container env parameter files resides on both servers, must match on both sides and is not a temporary folder.
 vSecDir: str = ""              # Secret directory where secret files reside during migration only, each file must match the secret name(s) used on the container.
 vFilePrefix: str = "migrate"   # Prefix for backups during migration, do not add _ at the end, that is added later.
@@ -142,12 +143,21 @@ def funcDisclaimer() -> None:
 
 ## Function - EndMessage
 def funcEndMessage() -> None:
-  # Build path return info.
-  if len(vSecDir) != 0:
+  # Build path and last row info.
+  if vCleanMigrateDir.lower() == "no":
+    if len(vSecDir) != 0:
       vPath: str = vMigrateDir + ", " + vSecDir
+      vLastRows: str = "The following folder(s) needs to be cleaned out manually on both sides for now.\n Folder(s): " + vPath
+    else:
+      vPath: str = vMigrateDir
+      vLastRows: str = "The following folder(s) needs to be cleaned out manually on both sides for now.\n Folder(s): " + vPath
   else:
-    vPath: str = vMigrateDir
-  # Determine if migration pod or single container.
+    if len(vSecDir) != 0:
+      vPath: str = vSecDir
+      vLastRows: str = "The following folder(s) needs to be cleaned out manually on both sides for now.\n Folder(s): " + vPath
+    else:
+      vLastRows: str = "No folder(s) needs to be cleaned out manually, bye..."
+  # Determine if migration is a pod or a single container.
   if vInputType.lower() == "container":
     print(
       "Migration Done!!!\n",
@@ -156,8 +166,7 @@ def funcEndMessage() -> None:
       "The container still exist on this server if migration failed on any step and can be restarted if needed.\n",
       "The local container needs to be manually removed when all test on migrated system is done and confirmed as working.\n",
       "\n",
-      "The following folders needs to be cleaned out manually on both sides for now.\n",
-      "Folder(s): " + vPath
+      vLastRows
     )
   elif vInputType.lower() == "pod":
     print(
@@ -168,8 +177,7 @@ def funcEndMessage() -> None:
       "The local pod and attached containers needs to be manually removed when all test on migrated\n",
       "system is done and confirmed as working.\n",
       "\n",
-      "The following folders needs to be cleaned out manually on both sides for now.\n",
-      "Folder(s): " + vPath
+      vLastRows
     )
   # Return nothing to remove it adding the word "None" to the output
   return ""
@@ -192,6 +200,41 @@ def funcCheckMigrateFolder() -> None:
       time.sleep(5)
   # Just return nothing, will output the word "None" if this do not exist.
   return ""
+
+## Function - Clean local migration folder.
+def funcCleanLocalMigrateFolder() -> None:
+  # check if vCleanMigrateDir is Yes.
+  if vCleanMigrateDir.lower() == "yes":
+    # Clean the folder.
+    print("Cleaning local migration folder...")
+    for fname in os.listdir(vMigrateDir):
+      os.remove(os.path.join(vMigrateDir, fname))
+    print("Cleaned local migration folder...")
+  elif vCleanMigrateDir.lower() == "no":
+    # Do not clean the folder.
+    print("Not cleaning local migration folder...")
+
+## Function - Clean remote migration folder.
+def funcCleanRemoteMigrateFolder() -> None:
+  if vCleanMigrateDir.lower() == "yes":
+    # Check to see if migration folder is empty, 1 = not empty & 0 = empty.
+    vCmdLine: str = '[ "$(ls -A ' + vMigrateDir + ')" ] && echo "1" || echo "0"'
+    vRemoteStatus: list = funcSftpCmdRL(vCmdLine, "Checking to see that there is something to clean in remote migration folder...")
+    # Check if return status is equal to 1
+    if vRemoteStatus[1] == "1":
+      vCmdLine: str = "rm " + vMigrateDir + "/*"
+      # Run the command and get status.
+      vRemoteStatus: list = funcSftpCmdRL(vCmdLine, "Trying to clean migration folder on remote server...")
+      if "No such file or directory" in vRemoteStatus[1]:
+        print("Could not clean migration folder on remote server, please check why...")
+        print("Error from command:\n", vRemoteStatus[1])
+      else:
+        print("Cleaned remote migration folder...")
+    else:
+      print("Folder is already empty nothing to clean...")
+  elif vCleanMigrateDir.lower() == "no":
+    # Do not clean the folder.
+    print("Not cleaning remote migration folder...")
 
 #### SFTP Functions ####
 
@@ -244,7 +287,7 @@ def funcSftpCmdRS(vSftpCmd: str, vShowMsg: str) -> list:
       vReturnMsg: str = "Error message:\n" + stderr_.read().decode("utf-8").strip()
       return vErrCode, vReturnMsg
     else:
-      print("Done...")
+      print("Command finished OK...")
       # To keep it consistent with 2 return statuses.
       vReturnMsg: str = "OK"
       return vStatus, vReturnMsg
@@ -818,7 +861,7 @@ def funcSyncNetwork(vName: str) -> str:
             print("Network created, continuing...")
           else:
             print("Cold not create network...")
-            print("Error from command:\n", vRemoteStatus)
+            print("Error from command:\n", vRemoteStatus[1])
             print("Halting further migrations steps, exiting...")
             exit(1)
         else:
@@ -1203,11 +1246,17 @@ def funcContainerJob() -> None:
   # Step 16 - Start container on remote server.
   print("\n-- Step 16: TimeStamp:", funcTimeString())
   funcStartContainer(vInputName,10)
-  # Step 17 - End SFTP connection.
-  print("\n-- Step 17: TimeStamp:", funcTimeString())
+  # Step 17 - Clean folder only if vCleanMigrateDir set to Yes.
+  print("\n-- Step 17 TimeStamp:", funcTimeString())
+  funcCleanLocalMigrateFolder()
+  # Step 18 - Clean folder only if vCleanMigrateDir set to Yes.
+  print("\n-- Step 18 TimeStamp:", funcTimeString())
+  funcCleanRemoteMigrateFolder()
+  # Step 19 - End SFTP connection.
+  print("\n-- Step 19: TimeStamp:", funcTimeString())
   funcSftpClose()
-  # Step 18 - Finally done.
-  print("\n-- Step 18: TimeStamp:", funcTimeString())
+  # Step 20 - Finally done.
+  print("\n-- Step 20: TimeStamp:", funcTimeString())
   funcEndMessage()
 
 ## Function - Pod Job.
@@ -1263,11 +1312,17 @@ def funcPodJob() -> None:
   # Step 15 - Start remote pod.
   print("\n-- Step 15: TimeStamp:", funcTimeString())
   funcStartPod(vInputName, 20)
-  # Step 16 - End SFTP connection.
+  # Step 16 - Clean folder only if vCleanMigrateDir set to Yes.
   print("\n-- Step 16 TimeStamp:", funcTimeString())
+  funcCleanLocalMigrateFolder()
+  # Step 17 - Clean folder only if vCleanMigrateDir set to Yes.
+  print("\n-- Step 17 TimeStamp:", funcTimeString())
+  funcCleanRemoteMigrateFolder()
+  # Step 18 - End SFTP connection.
+  print("\n-- Step 18 TimeStamp:", funcTimeString())
   funcSftpClose()
-  # Step 17 - Finally done.
-  print("\n-- Step 17: TimeStamp:", funcTimeString())
+  # Step 19 - Finally done.
+  print("\n-- Step 19: TimeStamp:", funcTimeString())
   funcEndMessage()
 
 ### Function - Main
