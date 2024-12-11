@@ -4,8 +4,8 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.2                                                #
-# Date: 2024-04-12                                              #
+# Version: 1.3.3                                                #
+# Date: 2024-12-11                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
 # Command: pip3 install paramiko                                #
@@ -207,6 +207,7 @@ def funcCleanLocalMigrateFolder() -> None:
   if vCleanMigrateDir.lower() == "yes":
     # Clean the folder.
     print("Cleaning local migration folder...")
+    print("Folder:", vMigrateDir)
     for fname in os.listdir(vMigrateDir):
       os.remove(os.path.join(vMigrateDir, fname))
     print("Cleaned local migration folder...")
@@ -377,7 +378,7 @@ def funcGetCntCreateCmd(vName: str) -> str:
       vClean04: str = vClean03.replace(" --detach", "")
       # Fix for custom sh start command with $ in them.
       vClean05: str = vClean04.replace('sh -c ', 'sh -c "')
-      vClean06: str = vClean05.replace('$', '\$')
+      vClean06: str = vClean05.replace(r'$', r'\$')
       # Add the final " at the end only if...
       if "sh -c" in vClean06:
         vClean07: str = vClean06 + '"'
@@ -925,10 +926,11 @@ def funcGetPodContainers(vName: str) -> list:
     vRunCmd = subprocess.Popen(vCmdLine, text=True, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     vCmdList: list = vRunCmd.stdout.readlines()
     vData = str(vCmdList[0])
+
     # Format data
     vSplit: list = vData.split('} {')
     for vRow in vSplit:
-      vClean1: str = re.sub('^\S+ ', '', vRow)
+      vClean1: str = re.sub(r'^\S+ ', '', vRow)
       vClean2: str = re.sub(' .*', '', vClean1)
       vClean3: str = re.sub('\n', '', vClean2)
       # Add to list.
@@ -1058,7 +1060,8 @@ def funcSyncPodContainers() -> None:
               vMSClean02: str = re.sub("\\'\\]","",vMSClean01)
               vGlobRequireList.remove(vMSClean02)
               print("Container '" + vList + "' migrated...")
-              print("-")
+              if len(vGlobRequireList) != 0:
+                print("-")
             else:
               print("Unknown error, cannot continue, exiting...")
               print(vGetStatus[1])
@@ -1083,7 +1086,8 @@ def funcSyncPodContainers() -> None:
         vGlobRequireList.remove(vCntList)
         # Final message.
         print("Container '" + vDepP1 + "' migrated...")
-        print("-")
+        if len(vGlobRequireList) != 0:
+          print("-")
 
 ## Function - Check and sync env file if used.
 def funcSyncPodEnvFiles() -> None:
@@ -1159,6 +1163,8 @@ def funcPodGetCntName() -> str:
 
 ## Function - Sync each container network.
 def funcPodSyncNetwork(vName: str) -> None:
+  # Check networks.
+  print("Checking for network(s)...")
   # Get containers.
   vListContainers: list = funcGetPodContainers(vName)
   # Do for every container
