@@ -4,8 +4,8 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.3                                                #
-# Date: 2024-12-11                                              #
+# Version: 1.3.4                                                #
+# Date: 2025-05-28                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
 # Command: pip3 install paramiko                                #
@@ -35,6 +35,8 @@ import sys
 import re
 import os
 
+import paramiko.pkey
+
 ## Get required input parameters.
 parser = argparse.ArgumentParser()
 parser.add_argument('--type', required=True, dest='sType', type=str, help='Is it a container or a pod (values: pod/container).')
@@ -63,41 +65,42 @@ vInputKey: str = str(args.sKey)
 ## Define global variables and lists for later usage.
 
 # Container create command.
-vGlobContainerCreateCmd: str = None
+vGlobContainerCreateCmd: str = ""
 # Pod create command.
-vGlobPodCreateCmd: str = None
+vGlobPodCreateCmd: str = ""
 # Network name.
-vGlobNetworkName: str = None
+vGlobNetworkName: str = ""
 # Require list.
 vGlobRequireList: list = []
 
 #### General functions ####
 
 ## Function - Get current date.
-def funcDateString() -> datetime:
+def funcDateString() -> str:
   # Returns the today string year, month, day.
   return datetime.now().strftime("%Y%m%d")
 
 # Function - Get current time.
-def funcTimeString() -> datetime:
+def funcTimeString() -> str:
   # Returns the today string year, month, day.
   return datetime.now().strftime("%H:%M:%S")
 
 # Function - General error message.
-def funcErrorMsg(vType: str) -> None:
-  print(
-    "\n",
-    "MIGRATION FAILED!!!",
-    "If you are seeing this message it means that somewhere in the process the migration failed.\n",
-    "The source " + vType + " still exits and can be used if needed so do not worry about that.\n",
-    "\n",
-    "Before trying to migrate again, you need to manually check what exists on the remote server \n",
-    "and manually removing any files, settings specific to the failed migration.",
-    "\n",
-    "Remember to read the error message generated during the migration process, it can lead you to where things went wrong."
+def funcErrorMsg(vType: str) -> str:
+  vErrMsg = (
+  "\n"
+  "MIGRATION FAILED!!!\n"
+  "If you are seeing this message it means that somewhere in the process the migration failed.\n"
+  "The source " + vType + " still exits and can be used if needed so do not worry about that.\n"
+  "\n"
+  "Before trying to migrate again, you need to manually check what exists on the remote server \n"
+  "and manually removing any files, settings specific to the failed migration."
+  "\n"
+  "Remember to read the error message generated during the migration process, it can lead you to where things went wrong."
+  "\n"
   )
-  # Just return nothing, will output the word "None" if this do not exist.
-  return ""
+  # Return message.
+  return vErrMsg
 
 # Function - Yes/No
 def funcYesNo(vQuestion: str) -> str:
@@ -110,7 +113,7 @@ def funcYesNo(vQuestion: str) -> str:
     return funcYesNo("Please enter only [y] or [n]...")
 
 ## Function - Disclaimer.
-def funcDisclaimer() -> None:
+def funcDisclaimer() -> str:
   if vAcceptDisclaimer.lower() == "no":
     print(
       "Disclaimer!!!\n",
@@ -142,7 +145,7 @@ def funcDisclaimer() -> None:
   return ""
 
 ## Function - EndMessage
-def funcEndMessage() -> None:
+def funcEndMessage() -> str:
   # Build path and last row info.
   if vCleanMigrateDir.lower() == "no":
     if len(vSecDir) != 0:
@@ -183,7 +186,7 @@ def funcEndMessage() -> None:
   return ""
 
 ## Function - Check migration folder.
-def funcCheckMigrateFolder() -> None:
+def funcCheckMigrateFolder() -> str:
   print("Checking to see that migration folder is empty...")
   # Check status of folder.
   if os.listdir(vMigrateDir) == []:
@@ -245,16 +248,17 @@ def funcSftpConnect() -> None:
     global vScpClient
     vScpClient = paramiko.SSHClient()
     vScpClient.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    vInputPortInt: int = int(vInputPort)
     # Check if to ask for username & password or to use keyfile.
     if vSftpUseKeyFile.lower() == "no":
       print('Enter Username & Password for remote server...')
       vUser: str = input('Username: ')
       vPass: str = getpass.getpass('Password: ')
-      vScpClient.connect(vInputDest, port=vInputPort, username=vUser, password=vPass)
+      vScpClient.connect(vInputDest, port=vInputPortInt, username=vUser, password=vPass)
     elif vSftpUseKeyFile.lower() == "yes":
       print('Using KeyFile to connect to remote server...')
-      vKeyFile: str = paramiko.RSAKey.from_private_key_file(vSftpKeyFilePath + "/" + vInputKey)
-      vScpClient.connect(vInputDest, port=vInputPort, pkey=vKeyFile, look_for_keys=False)
+      vKeyFile: str = paramiko.RSAKey.from_private_key_file(vSftpKeyFilePath + "/" + vInputKey) # type: ignore
+      vScpClient.connect(vInputDest, port=vInputPortInt, pkey=vKeyFile, look_for_keys=False) # type: ignore
     # Open connection
     global vScpConn
     vScpConn = vScpClient.open_sftp()
@@ -277,26 +281,37 @@ def funcSftpSend(vSftpFile: str, vShowMsg: str) -> None:
 
 ## Function - Run command via SFTP, return exit status and the message.
 def funcSftpCmdRS(vSftpCmd: str, vShowMsg: str) -> list:
+  # Define list.
+  vReturn: list = []
+  # Try to do the work.
   try:
     print(vShowMsg)
     print("Command: " + vSftpCmd)
     stdin_, stdout_, stderr_ = vScpClient.exec_command(vSftpCmd)
-    # Get exit status and return it.
-    vStatus: str = stdout_.channel.recv_exit_status()
+    # Get exit status.
+    vStatus: int = stdout_.channel.recv_exit_status()
+    # Get error status.
     vErrCode: int = stderr_.channel.recv_exit_status()
     if vErrCode != 0:
       vReturnMsg: str = "Error message:\n" + stderr_.read().decode("utf-8").strip()
-      return vErrCode, vReturnMsg
+      vReturn.insert(0, vErrCode)
+      vReturn.insert(1, vReturnMsg)
     else:
       print("Command finished OK...")
       # To keep it consistent with 2 return statuses.
       vReturnMsg: str = "OK"
-      return vStatus, vReturnMsg
+      vReturn.insert(0, vStatus)
+      vReturn.insert(1, vReturnMsg)
   except OSError as vErr:
     print(vErr)
+  # Return status
+  return vReturn
 
 ## Function - Run command via SFTP, return command status and response.
 def funcSftpCmdRL(vSftpCmd: str, vShowMsg: str) -> list:
+  # Define list.
+  vReturn: list = []
+  # Try to do the work.
   try:
     print(vShowMsg)
     print("Command: " + vSftpCmd)
@@ -305,10 +320,12 @@ def funcSftpCmdRL(vSftpCmd: str, vShowMsg: str) -> list:
     vLines: list = stdout_.readlines()
     # Get exit status.
     vStatus: int = stdout_.channel.recv_exit_status()
+    # Get error status.
     vErrCode: int = stderr_.channel.recv_exit_status()
     if vErrCode != 0:
       vReturnMsg:str = "Error message:\n" + stderr_.read().decode("utf-8").strip()
-      return vErrCode, vReturnMsg
+      vReturn.insert(0, vErrCode)
+      vReturn.insert(1, vReturnMsg)
     elif vErrCode == 0:
       if len(vLines) > 0:
         if vLines:
@@ -316,11 +333,15 @@ def funcSftpCmdRL(vSftpCmd: str, vShowMsg: str) -> list:
             vClean01: str = re.sub("\\[\\'", '', vLine)
             vClean02: str = re.sub("\\'\\]\n", '', vClean01)
             vClean03:str  = re.sub("\n", '', vClean02)
-            return vStatus, vClean03
+            vReturn.insert(0, vStatus)
+            vReturn.insert(1, vClean03)
       else:
-        return vStatus, "None"
+        vReturn.insert(0, vStatus)
+        vReturn.insert(1, "None")
   except OSError as vErr:
     print(vErr)
+  # Return status
+  return vReturn
 
 ## Function - Close SFTP connection.
 def funcSftpClose() -> None:
@@ -336,9 +357,8 @@ def funcSftpClose() -> None:
 ## Function - Check if container exist locally, exit if not.
 def funcContainerExistLocal() -> None:
   vCmdLine: str = "podman container inspect " + vInputName + " --format {{.Name}}"
-  vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  vCmdData: list = vRunCmd.stdout.readlines()
-  if len(vCmdData) == 0:
+  vRunCmd = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
+  if len(vRunCmd) == 0:
     print("No matching container found, exiting...")
     print(funcErrorMsg("container"))
     exit(1)
@@ -346,7 +366,10 @@ def funcContainerExistLocal() -> None:
     print("Local container exists, continuing...")
 
 ## Function - Check if container exist on remote server.
-def funcContainerExistRemote(vName: str, vLoop: bool) -> int:
+def funcContainerExistRemote(vName: str, vLoop: str) -> int:
+  # Initialize variable.
+  vReturn: str = ""
+  # Build command.
   vCmdLine: str = "podman container list --all --filter name=" + vName + " --format {{.Names}}"
   # Run the command and get status.
   vRemoteStatus: list = funcSftpCmdRL(vCmdLine, "Checking to see if container already exist on remote server...")
@@ -358,18 +381,22 @@ def funcContainerExistRemote(vName: str, vLoop: bool) -> int:
       exit(1)
     else:
         # Return status 1 for loop functions.
-        return "1"
+        vReturn = "1"
   else:
     print("Container do not seem to exist on remote server, continuing...")
     # Return status 0 for loop functions.
-    return "0"
+    vReturn = "0"
+  # Return status
+  return int(vReturn)
 
 ## Function - Get container create command.
 def funcGetCntCreateCmd(vName: str) -> str:
+  # Initialize variable.
+  vReturn: str = ""
+  # Do the work.
   try:
     vCmdLine: str = "podman container inspect " + vName + " --format {{.Config.CreateCommand}}"
-    vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    vCmdData: list = vRunCmd.stdout.readlines()
+    vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
     for vCntCreate in vCmdData:
       vClean01: str = re.sub('\\[', '', vCntCreate.decode("utf-8").strip())
       vClean02: str = re.sub(']', '', vClean01)
@@ -383,17 +410,22 @@ def funcGetCntCreateCmd(vName: str) -> str:
       if "sh -c" in vClean06:
         vClean07: str = vClean06 + '"'
         # Output.
-        return vClean07
+        vReturn = vClean07
       else:
         # Output.
-        return vClean06
+        vReturn = vClean06
   except:
     print("Cannot get create command, exiting...")
     print(funcErrorMsg("container"))
     exit(1)
+  # Return status.
+  return vReturn
 
 ## Function - Get volume names.
 def funcGetCntVolName(vName: str) -> list:
+  # Initialize variable.
+  vReturn: list = []
+  # Do the work.
   try:
     # Get create command.
     vGetCreateString: str = vGlobContainerCreateCmd
@@ -403,9 +435,8 @@ def funcGetCntVolName(vName: str) -> list:
       vNameList: list = []
       # CMD
       vCmdLine: str = "podman container inspect " + vName + " --format {{.Mounts}}"
-      vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-      vCmdData: str = vRunCmd.stdout.readlines()
-      vList: str = str(vCmdData[0])
+      vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
+      vList: str = str(vCmdData)
       # Split the volume data.
       vSplit: list = vList.split('} {')
       # Loop through the data.
@@ -416,18 +447,23 @@ def funcGetCntVolName(vName: str) -> list:
         # Add to list.
         vNameList.append(vCleanEnd)
       # Return the finished list.
-      return vNameList
+      vReturn = vNameList
     else:
       # If no volume exist return "None"
-      return "None"
+      vReturn = ["None"]
   except:
     # If we cannot get volume data at all exit.
     print("Error checking volume information, exiting...")
     print(funcErrorMsg("container"))
     exit(1)
+  # Return data.
+  return vReturn
 
 ## Function - Sync container between servers.
-def funcSyncContainer(vName: str, vLoop: bool) -> list:
+def funcSyncContainer(vName: str, vLoop: int) -> list:
+  # Initialize list..
+  vReturn: list = []
+  # Do the work.
   try:
     print("Getting container '" + vName + "' create command...")
     vCreateCmd: str = vGlobContainerCreateCmd
@@ -437,33 +473,33 @@ def funcSyncContainer(vName: str, vLoop: bool) -> list:
     # Check return status.
     if vRemoteStatus[0] == 0:
       print("Container created on remote server...")
-      return "0", "OK"
+      vReturn = ["0","OK"]
     else:
-      if vLoop.lower() != "true":
+      if vLoop != 1:
         print("Cannot create container on remote server...")
         print(vRemoteStatus[1])
         print(funcErrorMsg("container"))
         exit(1)
       else:
         # Return that we could not create container.
-        return "1", vRemoteStatus[1]
+        vReturn = ["1",vRemoteStatus[1]]
   except:
     print("Cannot migrate container, exiting...")
     print(funcErrorMsg("container"))
     exit(1)
+  # Return status,
+  return vReturn
 
 ## Function - Get container Pod membership.
 def funcGetPodStatus() -> None:
   vCmdLine: str = "podman container inspect " + vInputName + " --format {{.Pod}}"
-  vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  vCmdData: str = vRunCmd.stdout.readlines()
+  vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
   # Check length of returned data.
   vCmdDataExp: str = vCmdData[0].decode("utf-8").strip()
   if len(vCmdDataExp) > 1:
     # Get name from ID
     vCmdLine: str = "podman pod inspect " + vCmdDataExp + " --format {{.Name}}"
-    vRunCmd: str = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    vCmdPod: str = vRunCmd.stdout.readlines()
+    vCmdPod = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
     for vPodName in vCmdPod:
       # Output.
       print("This container is a member of the following pod: '" + vPodName.decode("utf-8").strip() + "', cannot migrate it as a single container, use Pod migration option instead, exiting...")
@@ -474,21 +510,25 @@ def funcGetPodStatus() -> None:
 
 ## Function - Stop container.
 def funcStopContainer() -> str:
+  # Define list.
+  vReturn: str = ""
+  # Do the work.
   print("Stopping local container...")
   vCmdLine: str = "podman container stop " + vInputName
-  vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  vCmdOut: list = vRunCmd.stdout.readlines()
-  vCmdErr: list = vRunCmd.stderr.readlines()
+  vRunCmd = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  vCmdOut: list = vRunCmd.stdout.splitlines()
+  vCmdErr: list = vRunCmd.stderr.splitlines()
   if vCmdOut:
     for vData in vCmdOut:
       vName: str = vData.decode("utf-8").strip()
       if vName.lower() == vInputName.lower():
-        return "Container stopped OK..."
+        vReturn = "Container stopped OK..."
       else:
-        return vName
+        vReturn = vName
   if vCmdErr:
     for vError in vCmdErr:
-      return vError.decode("utf-8").strip()
+      vReturn = vError.decode("utf-8").strip()
+  return vReturn
 
 ## Function - Start remote container.
 def funcStartContainer(vName: str, vWait: int) -> None:
@@ -511,7 +551,7 @@ def funcStartContainer(vName: str, vWait: int) -> None:
       print("Could not get status of container, error message:\n", vRemoteStatus[1])
 
 ## Function - Volume Backup.
-def funcVolumeBackup(vGetVolName: str) -> list:
+def funcVolumeBackup(vGetVolName: list) -> list:
   try:
     # Backup list.
     vFileList: list = []
@@ -539,11 +579,11 @@ def funcImageSync(vName: str) -> None:
     ## Get container image
     print("Getting image from '" + vName + "' container...")
     vCmdLine: str = "podman container inspect " + vName + " --format {{.ImageName}}"
-    vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    vCmdData: list = vRunCmd.stdout.readlines()
+    vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
+    vImgSource: str = ""
     for vImg in vCmdData:
       # Clean input.
-      vImgSource: str =  vImg.decode("utf-8").strip()
+      vImgSource = vImg.decode("utf-8").strip()
     # CMD
     vCmdLine: str = "podman image inspect " + vImgSource + " --format {{.Id}}"
     # Get local image Id.
@@ -560,7 +600,7 @@ def funcImageSync(vName: str) -> None:
       # Clean image name.
       vClean1: str = vImgSource.replace(".", "_")
       vClean2: str = vClean1.replace("/", "_")
-      vName: str = vClean2.replace(":", "_")
+      vName = vClean2.replace(":", "_")
       # CMD.
       vCmdLine: str = "podman image save --format docker-archive --quiet --output"
       # Build path & filename.
@@ -600,6 +640,11 @@ def funcInitContainer(vName: str) -> None:
 
 ## Function - Volume send and restore.
 def funcVolSendRestore(vName: str, vType: str) -> None:
+  # Initialize list
+  vWorkVolume: list = [str]
+  # Initialize variable
+  vCleanEnd: str = ""
+  # Do the work.
   try:
     # Determine if called for pod or container.
     if vType == "container":
@@ -607,7 +652,7 @@ def funcVolSendRestore(vName: str, vType: str) -> None:
     elif vType == "pod":
       vWorkVolume = funcGetPodVolName(vName)
     # Check parameter status.
-    if vWorkVolume != "None":
+    if vWorkVolume[0] != "None":
       # Backup returns the full filepath of every
       # volume backup taken for further processing.
       print("Checking '" + vName + "' for volumes...")
@@ -618,7 +663,7 @@ def funcVolSendRestore(vName: str, vType: str) -> None:
       # Restore volumes on remote machine.
       for vFile in vBackupVolFiles:
         vCleanStart: str = re.sub('.*\\/' + vFilePrefix + '\\_', '', vFile)
-        vCleanEnd: str = re.sub('_' + '[0-9].*', '', vCleanStart)
+        vCleanEnd = re.sub('_' + '[0-9].*', '', vCleanStart)
         vCmd: str = "podman volume import " + vCleanEnd + ' ' + vFile
         # Run the remote command and get result.
         vRemoteStatus: list = funcSftpCmdRS(vCmd, "Importing volume on remote server...")
@@ -634,8 +679,10 @@ def funcVolSendRestore(vName: str, vType: str) -> None:
     print(vCmdErr)
 
 ## Function - Check current env path against vEnvDir.
-def funcGetContainerEnvFilePath() -> list:
-  #vCntCreateString = funcGetCntCreateCmd(vName)
+def funcGetContainerEnvFilePath() -> str:
+  # Initialize variable
+  vReturn: str = ""
+  # Do the work.
   vCntCreateString: str = vGlobContainerCreateCmd
   if "--env-file" in str(vCntCreateString):
     # Clean the env path.
@@ -650,8 +697,8 @@ def funcGetContainerEnvFilePath() -> list:
     # Remove last index in list.
     del vList[vLength]
     # Merge list back to one string.
-    vFinal: str = "/" + "/".join(vList)
-    return vFinal
+    vReturn = "/" + "/".join(vList)
+  return vReturn
 
 ## Function - Check and sync env file if used.
 def funcSyncContainerEnvFile() -> None:
@@ -668,13 +715,12 @@ def funcSyncContainerEnvFile() -> None:
       # Return current path.
       vFile: str = vClean02
       # Check if current path matches VEnvDir
-      vContEnvFile: list = funcGetContainerEnvFilePath()
+      vContEnvFile: str = funcGetContainerEnvFilePath()
       if vContEnvFile == vEnvDir:
         # Check to see if a file with same name already exist on both sides.
         vCmdLine: str = "test -f " + vFile + " ; echo $?"
         # Run the command on local server and get status.
-        vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        vCmdData: list = vRunCmd.stdout.readlines()
+        vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
         if vCmdData[0].strip().decode("utf-8") == "1":
           print("No local ENV file found, exiting...")
           print(funcErrorMsg("container"))
@@ -720,7 +766,7 @@ def funcSyncContainerSecret(vName: str) -> None:
           vClean02: str = re.sub('\\,.*', '', vClean01)
           vAllSecrets.append(vClean02)
       # Remove brackets from list for presentation.
-      vSecList: list = str(vAllSecrets)[1:-1]
+      vSecList: str = str(vAllSecrets)[1:-1]
       # List for return statuses
       vSecRStatus: list = []
       # Check to see if there are a secret file(s) for the container under vSecDir.
@@ -804,7 +850,7 @@ def funcSyncContainerSecret(vName: str) -> None:
     print("Container '" + funcPodGetCntName() + "' is not using secrets, continuing...")
 
 ## Function - Check and sync network.
-def funcSyncNetwork(vName: str) -> str:
+def funcSyncNetwork(vName: str) -> None:
   # Get global variable.
   vCreateString: str = vGlobContainerCreateCmd
   # Check to see if the network option is used.
@@ -879,8 +925,7 @@ def funcSyncNetwork(vName: str) -> str:
 ## Function - Check if pod exist.
 def funcPodExistLocal(vName: str) -> None:
   vCmdLine: str = "podman pod inspect " + vName + " --format {{.Name}}"
-  vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  vCmdData: list = vRunCmd.stdout.readlines()
+  vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
   if len(vCmdData) == 0:
     print("No matching pod found, cannot continue, exiting...")
     print(funcErrorMsg("pod"))
@@ -902,19 +947,22 @@ def funcPodExistRemote(vName: str) -> None:
 
 ## Function - Get pod create command.
 def funcGetPodCreateCmd(vName: str) -> str:
+  # Initialize variable
+  vReturn: str = ""
+  # Do the work.
   try:
     vCmdLine: str = "podman pod inspect " + vName + " --format {{.CreateCommand}}"
-    vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    vCmdData: list = vRunCmd.stdout.readlines()
+    vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
     for vPodCreate in vCmdData:
       vCleanStart: str = re.sub('\\[', '', vPodCreate.decode("utf-8").strip())
       vCleanEnd: str = re.sub(']', '', vCleanStart)
-      # Output.
-      return vCleanEnd
+      vReturn =  vCleanEnd
   except:
     print("Cannot get create command, exiting...")
     print(funcErrorMsg("pod"))
     exit(1)
+  #Return status
+  return vReturn
 
 ## Function - Get pod containers.
 def funcGetPodContainers(vName: str) -> list:
@@ -923,10 +971,8 @@ def funcGetPodContainers(vName: str) -> list:
     vNameList: list = []
     # CMD
     vCmdLine: str = "podman pod inspect " + vName + " --format {{.Containers}}"
-    vRunCmd = subprocess.Popen(vCmdLine, text=True, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    vCmdList: list = vRunCmd.stdout.readlines()
+    vCmdList: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
     vData = str(vCmdList[0])
-
     # Format data
     vSplit: list = vData.split('} {')
     for vRow in vSplit:
@@ -969,6 +1015,9 @@ def funcSyncPod() -> None:
 
 ## Function - Get pod volume names.
 def funcGetPodVolName(vName: str) -> list:
+  # Initialize variable.
+  vReturn: list = []
+  # Do the work.
   try:
     # Get create command.
     #vGetCreateString = funcGetCntCreateCmd(vName)
@@ -979,9 +1028,8 @@ def funcGetPodVolName(vName: str) -> list:
       vNameList: list = []
       # CMD
       vCmdLine: str = "podman pod inspect " + vName + " --format {{.Mounts}}"
-      vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-      vCmdData: str = vRunCmd.stdout.readlines()
-      vList: str = str(vCmdData[0])
+      vCmdData: list = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
+      vList: str = str(vCmdData)
       # Split the volume data.
       vSplit: list = vList.split('} {')
       # Loop through the data.
@@ -992,15 +1040,16 @@ def funcGetPodVolName(vName: str) -> list:
         # Add to list.
         vNameList.append(vCleanEnd)
       # Return the finished list.
-      return vNameList
+      vReturn = vNameList
     else:
       # If no volume exist return "None"
-      return "None"
+      vReturn = ["None"]
   except:
     # If we cannot get volume data at all exit.
     print("Error checking volume information, exiting...")
     print(funcErrorMsg("pod"))
     exit(1)
+  return vReturn
 
 ## Function - Create containers on remote server.
 def funcSyncPodContainers() -> None:
@@ -1028,7 +1077,7 @@ def funcSyncPodContainers() -> None:
           print("Starting migration for '" + vList + "' container...")
           # Check if dependencies are met
           vRemoteStatus: int = funcContainerExistRemote(vList,"true")
-          if vRemoteStatus[0] == "1":
+          if vRemoteStatus == 1:
             print("Container '" + vList +  "' already exist on remote server, setting as migrated..")
             # Remove from list when classified as migrated.
             if vList in vGlobRequireList:
@@ -1039,7 +1088,7 @@ def funcSyncPodContainers() -> None:
             # Manipulate global variable for each container.
             vGlobContainerCreateCmd = funcGetCntCreateCmd(vList)
             # Sync container.
-            vGetStatus: list = funcSyncContainer(vList,"true")
+            vGetStatus: list = funcSyncContainer(vList,1)
             # Check return status, if it complains about missing requirements,
             if "cannot be used as a dependency" in vGetStatus[1]:
               # What to do when requirement is not meet.
@@ -1055,7 +1104,7 @@ def funcSyncPodContainers() -> None:
               # Remove from list when classified as migrated.
               vReqList.remove(vList)
               # Remove from global list.
-              vMigSearch: str = list(filter(lambda x: x.startswith(vList), vGlobRequireList))
+              vMigSearch: str = str(list(filter(lambda x: x.startswith(vList), vGlobRequireList)))
               vMSClean01: str = re.sub("\\[\\'","",str(vMigSearch))
               vMSClean02: str = re.sub("\\'\\]","",vMSClean01)
               vGlobRequireList.remove(vMSClean02)
@@ -1075,7 +1124,7 @@ def funcSyncPodContainers() -> None:
         # Manipulate global variable for each container.
         vGlobContainerCreateCmd = funcGetCntCreateCmd(vDepP1)
         # Sync container.
-        vGetStatus: list = funcSyncContainer(vDepP1,"true")
+        vGetStatus: list = funcSyncContainer(vDepP1,1)
         # Initialize container.
         funcInitContainer(vDepP1)
         # Migrate volumes...
@@ -1136,21 +1185,25 @@ def funcStartPod(vName: str, vWait: int) -> None:
 
 ## Function - Stop pod.
 def funcStopPod() -> str:
+  # Initialize variable.
+  vReturn: str = ""
+  # Do the work.
   print("Stopping local pod...")
   vCmdLine: str = "podman pod stop " + vInputName
-  vRunCmd = subprocess.Popen(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  vCmdOut: list = vRunCmd.stdout.readlines()
-  vCmdErr: list = vRunCmd.stderr.readlines()
+  vRunCmd = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  vCmdOut: list = vRunCmd.stdout.splitlines()
+  vCmdErr: list = vRunCmd.stderr.splitlines()
   if vCmdOut:
     for vData in vCmdOut:
       vName: str = vData.decode("utf-8").strip()
       if vName.lower() == vInputName.lower():
-        return "Pod stopped OK..."
+        vReturn = "Pod stopped OK..."
       else:
-        return vName
+        vReturn = vName
   if vCmdErr:
     for vError in vCmdErr:
-      return vError.decode("utf-8").strip()
+      vReturn = vError.decode("utf-8").strip()
+  return vReturn
 
 ## Function - Get container name.
 def funcPodGetCntName() -> str:
@@ -1239,7 +1292,7 @@ def funcContainerJob() -> None:
   funcSyncContainerSecret(vInputName)
   # Step 12 - Create container on remote server.
   print("\n-- Step 12: TimeStamp:", funcTimeString())
-  funcSyncContainer(vInputName,"false")
+  funcSyncContainer(vInputName,0)
   # Step 13 - Initialize container.
   print("\n-- Step 13: TimeStamp:", funcTimeString())
   funcInitContainer(vInputName)
