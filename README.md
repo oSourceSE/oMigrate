@@ -2,7 +2,10 @@
 Pod & Container migration script for podman built in python.
 
 ## Versions
-The script has been validated against the following versions of podman and python on Ubuntu.
+The script has been validated against the following versions of podman and python on Ubuntu 26.04.
+
+### Version 1.3.6
+Podman: 5.7.0 / Python 3.14.4
 
 ### Version 1.3.4
 
