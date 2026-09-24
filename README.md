@@ -22,12 +22,12 @@ Download the latest version into a suitable folder on your system and then to ge
 
 The script needs a Python `venv` for best compatibility.
 
-On Debian / Ubuntu the package needed is called `python3.xx-venv` and must be installed before continuing, for other systems adjust needed package and the commands below so that they work for you system.
+On Debian / Ubuntu the package needed is called `python3-venv` and must be installed before continuing, for other systems adjust needed package and the commands below so that they work for you system.
 
-Install package, replace `xx` with the version you want to install.
+Install package.
 
 ```bash
-sudo apt install python3.xx-venv
+sudo apt install python3-venv
 ```
 
 ##### Virtual Environment

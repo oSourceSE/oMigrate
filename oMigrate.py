@@ -4,8 +4,8 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.6                                                #
-# Date: 2025-09-01                                              #
+# Version: 1.3.7                                                #
+# Date: 2025-09-24                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
 # Command: pip3 install paramiko                                #
@@ -13,10 +13,13 @@
 
 ## Common parameters.
 
-vMigrateDir: str = ""          # Where to put the files during migration for further processing, must be same path at receiving server.
+vLocalMigrateDir: str = ""     # Where to put the local files during migration for further processing.
+vRemoteMigrateDir: str = ""    # Where to put the remote files during migration for further processing.
 vCleanMigrateDir: str = "No"   # Should we automatically clean the migration folder when done?
-vEnvDir: str = ""              # Where container env parameter files resides on both servers, must match on both sides and is not a temporary folder.
-vSecDir: str = ""              # Secret directory where secret files reside during migration only, each file must match the secret name(s) used on the container.
+vLocalEnvDir: str = ""         # Where container env parameter files resides on both servers, must match on both sides and is not a temporary folder.
+vRemoteEnvDir: str = ""        # Where container env parameter files resides on both servers, must match on both sides and is not a temporary folder.
+vLocalSecDir: str = ""         # Secret directory where secret files reside during migration only, each file must match the secret name(s) used on the container.
+vRemoteSecDir: str = ""        # Secret directory where secret files reside during migration only, each file must match the secret name(s) used on the container.
 vFilePrefix: str = "migrate"   # Prefix for backups during migration, do not add _ at the end, that is added later.
 vSftpUseKeyFile: str = "No"    # Use a keyfile or username & password when connection to remote server.
 vSftpKeyFilePath: str = ""     # Set to full path where your key files reside, only used if vSftpUseKeyFile is set to Yes.
@@ -121,8 +124,9 @@ def funcDisclaimer() -> str:
       "Beware that volumes that contain symlinks within the filesystem experience an issue with podman and can result in missing\n",
       "files on the destination server when a volume is restored.\n",
       "\n",
-      "Path on local server and remote server must match 100% for the parameter vMigrateDir, this means that you need to\n",
-      "have the same path on both servers.\n",
+      "Set the paths correctly for 'vLocalMigrateDir' and 'vRemoteMigrateDir' so that the script can handle all the data transfer correctly.\n",
+      "\n",
+      "The script also needs the directories for ENV and security files set correctly on both servers.\n",
       "\n",
       "You need to run this script with the users running your containers both locally and for the remote SFTP session\n",
       "since this script tries to go the full line of migrating and starting the container at hand.\n",
@@ -146,20 +150,18 @@ def funcDisclaimer() -> str:
 ## Function - EndMessage
 def funcEndMessage() -> str:
   # initiate variables.
-  vPath: str = ''
   vLastRows: str = ''
+  vLocalPaths = vLocalMigrateDir + ", " + vLocalSecDir
+  vRemotePaths: str = vRemoteMigrateDir + ", " + vRemoteSecDir
   # Build path and last row info.
   if vCleanMigrateDir.lower() == "no":
-    if len(vSecDir) != 0:
-      vPath= vMigrateDir + ", " + vSecDir
-      vLastRows = "The following folder(s) needs to be cleaned out manually on both sides for now.\nFolder(s): " + vPath
+    if len(vLocalSecDir) != 0:
+      vLastRows = "The following folder(s) needs to be cleaned out manually on both sides.\nLocal: " + vLocalPaths + "\nRemote: " + vRemotePaths
     else:
-      vPath = vMigrateDir
-      vLastRows = "The following folder(s) needs to be cleaned out manually on both sides for now.\nFolder(s): " + vPath
+      vLastRows = "The following folder(s) needs to be cleaned out manually on both sides.\nLocal: " + vLocalMigrateDir + "\nRemote: " + vRemoteMigrateDir
   else:
-    if len(vSecDir) != 0:
-      vPath = vSecDir
-      vLastRows = "The following folder(s) needs to be cleaned out manually on both sides for now.\nFolder(s): " + vPath
+    if len(vLocalSecDir) != 0:
+      vLastRows = "The following folder(s) needs to be cleaned out manually on both sides.\nLocal: " + vLocalSecDir + "\nRemote: " + vRemoteSecDir
     else:
       vLastRows = "No folder(s) needs to be cleaned out manually, bye..."
   # Determine if migration is a pod or a single container.
@@ -193,7 +195,7 @@ def funcEndMessage() -> str:
 def funcCheckMigrateFolder() -> str:
   print("Checking to see that migration folder is empty...")
   # Check status of folder.
-  if os.listdir(vMigrateDir) == []:
+  if os.listdir(vLocalMigrateDir) == []:
     print("Folder is empty, continuing...")
   else:
     print("Folder is not empty, recommended not to continue without cleaning it first...")
@@ -214,9 +216,9 @@ def funcCleanLocalMigrateFolder() -> None:
   if vCleanMigrateDir.lower() == "yes":
     # Clean the folder.
     print("Cleaning local migration folder...")
-    print("Folder:", vMigrateDir)
-    for fname in os.listdir(vMigrateDir):
-      os.remove(os.path.join(vMigrateDir, fname))
+    print("Folder:", vLocalMigrateDir)
+    for fname in os.listdir(vLocalMigrateDir):
+      os.remove(os.path.join(vLocalMigrateDir, fname))
     print("Cleaned local migration folder...")
   elif vCleanMigrateDir.lower() == "no":
     # Do not clean the folder.
@@ -229,11 +231,11 @@ def funcCleanRemoteMigrateFolder() -> None:
     vCmdLine: str = ''
     vRemoteStatus: list[str] = []
     # Check to see if migration folder is empty, 1 = not empty & 0 = empty.
-    vCmdLine = '[ "$(ls -A ' + vMigrateDir + ')" ] && echo "1" || echo "0"'
-    vRemoteStatus = funcSftpCmdRL(vCmdLine, "Checking to see that there is something to clean in remote migration folder...")
+    vCmdLine = '[ "$(ls -A ' + vRemoteMigrateDir + ')" ] && echo "1" || echo "0"'
+    vRemoteStatus = funcSftpCmdRL(vCmdLine, "Checking to see if there is something to clean in remote migration folder...")
     # Check if return status is equal to 1
     if vRemoteStatus[1] == "1":
-      vCmdLine = "rm " + vMigrateDir + "/*"
+      vCmdLine = "rm " + vRemoteMigrateDir + "/*"
       # Run the command and get status.
       vRemoteStatus = funcSftpCmdRL(vCmdLine, "Trying to clean migration folder on remote server...")
       if "No such file or directory" in vRemoteStatus[1]:
@@ -276,11 +278,11 @@ def funcSftpConnect() -> None:
     exit(1)
 
 ## Function - Send file via SFTP.
-def funcSftpSend(vSftpFile: str, vShowMsg: str) -> None:
+def funcSftpSend(vSftpLocalFile: str, vSftpRemoteFile: str, vShowMsg: str) -> None:
   try:
     print(vShowMsg)
-    print('Sending file: ' + vSftpFile)
-    _ = vScpConn.put(vSftpFile, vSftpFile)
+    print('Sending file: ' + vSftpLocalFile)
+    _ = vScpConn.put(vSftpLocalFile, vSftpRemoteFile)
     print('Sent Ok...')
   except OSError as vErr:
     print('Could not send file...')
@@ -475,10 +477,11 @@ def funcSyncContainer(vName: str, vLoop: int) -> list[str]:
   # Do the work.
   try:
     print("Getting container '" + vName + "' create command...")
-    vCreateCmd: str = vGlobContainerCreateCmd
+    vCreateOrgCmd: str = vGlobContainerCreateCmd
+    vCreateNewCmd: str = vCreateOrgCmd.replace(vLocalEnvDir, vRemoteEnvDir)
     # Run the remote command and get result..
     vMessage: str = "Creating container '" + vName + "' on remote server..."
-    vRemoteStatus: list[str] = funcSftpCmdRS(vCreateCmd, vMessage)
+    vRemoteStatus: list[str] = funcSftpCmdRS(vCreateNewCmd, vMessage)
     # Check return status.
     if vRemoteStatus[0] == "0":
       print("Container created on remote server...")
@@ -487,7 +490,6 @@ def funcSyncContainer(vName: str, vLoop: int) -> list[str]:
       if vLoop != 1:
         print("Cannot create container on remote server...")
         print(vRemoteStatus[1])
-        print(funcErrorMsg("container"))
         exit(1)
       else:
         # Return that we could not create container.
@@ -568,7 +570,7 @@ def funcVolumeBackup(vGetVolName: list[str]) -> list[str]:
     for vName in vGetVolName:
       print("Backing up volume: ", vName)
       vCmdLine: str = "podman volume export --output"
-      vSetTarFile=os.path.join(vMigrateDir, vFilePrefix + "_" + vName + "_" + funcDateString() + ".tar")
+      vSetTarFile=os.path.join(vLocalMigrateDir, vFilePrefix + "_" + vName + "_" + funcDateString() + ".tar")
       # Execute export of volumes.
       vCmd: str = (vCmdLine + " " + vSetTarFile + " " + vName)
       _ = subprocess.run(vCmd, shell=True, check=True)
@@ -613,17 +615,18 @@ def funcImageSync(vName: str) -> None:
       # CMD.
       vCmdLine = "podman image save --format docker-archive --quiet --output"
       # Build path & filename.
-      vSetTarFile: str = os.path.join(vMigrateDir, vFilePrefix + "_img_" + vName + "_" + funcDateString() + ".tar")
+      vSetLocalTarFile: str = os.path.join(vLocalMigrateDir, vFilePrefix + "_img_" + vName + "_" + funcDateString() + ".tar")
+      vSetRemoteTarFile: str = os.path.join(vRemoteMigrateDir, vFilePrefix + "_img_" + vName + "_" + funcDateString() + ".tar")
       # Check if image already been saved, skip if yes.
-      vFileExist: bool = os.path.isfile(vSetTarFile)
+      vFileExist: bool = os.path.isfile(vSetLocalTarFile)
       if vFileExist != True:
         # Execute image save.
-        vCmd: str = (vCmdLine + " " + vSetTarFile + " " + vImgSource)
+        vCmd: str = (vCmdLine + " " + vSetLocalTarFile + " " + vImgSource)
         _ = subprocess.run(vCmd, shell=True, check=True)
         # Send image to remote server.
-        funcSftpSend(vSetTarFile, "Syncing image to remote server...")
+        funcSftpSend(vSetLocalTarFile, vSetRemoteTarFile, "Syncing image to remote server...")
         # Import image on remote server.
-        vCmdImport: str = "podman image load --input " + vSetTarFile
+        vCmdImport: str = "podman image load --input " + vSetRemoteTarFile
         # Run the remote command and get result.
         vRemoteStatus: list[str] = funcSftpCmdRS(vCmdImport, "Importing image on remote server...")
         if vRemoteStatus[0] != "0":
@@ -646,6 +649,7 @@ def funcInitContainer(vName: str) -> None:
   except OSError as vCmdErr:
     print("Cannot Initialize the following container: " + vName)
     print(vCmdErr)
+    exit(1)
 
 ## Function - Volume send and restore.
 def funcVolSendRestore(vName: str, vType: str) -> None:
@@ -668,12 +672,16 @@ def funcVolSendRestore(vName: str, vType: str) -> None:
       vBackupVolFiles: list[str] = funcVolumeBackup(vWorkVolume)
       # Send each backup.
       for vFile in vBackupVolFiles:
-        funcSftpSend(vFile, "Sending volume backup...")
+        vLocalFileName: tuple[str, str] = os.path.split(vFile)
+        vSendRemoteFile: str = vRemoteMigrateDir + "/" + vLocalFileName[1]
+        funcSftpSend(vFile, vSendRemoteFile, "Sending volume backup...")
       # Restore volumes on remote machine.
       for vFile in vBackupVolFiles:
         vCleanStart: str = re.sub('.*\\/' + vFilePrefix + '\\_', '', vFile)
         vCleanEnd = re.sub('_' + '[0-9].*', '', vCleanStart)
-        vCmd: str = "podman volume import " + vCleanEnd + ' ' + vFile
+        vRemoteFileName: tuple[str, str] = os.path.split(vFile)
+        vRemoteFilePath: str = vRemoteMigrateDir + "/" + vRemoteFileName[1]
+        vCmd: str = "podman volume import " + vCleanEnd + ' ' + vRemoteFilePath
         # Run the remote command and get result.
         vRemoteStatus: list[str] = funcSftpCmdRS(vCmd, "Importing volume on remote server...")
         if vRemoteStatus[0] != "0":
@@ -686,6 +694,7 @@ def funcVolSendRestore(vName: str, vType: str) -> None:
   except OSError as vCmdErr:
     print("Cannot restore the following volume: " + vCleanEnd)
     print(vCmdErr)
+    exit(1)
 
 ## Function - Check current env path against vEnvDir.
 def funcGetContainerEnvFilePath() -> str:
@@ -712,7 +721,7 @@ def funcGetContainerEnvFilePath() -> str:
 ## Function - Check and sync env file if used.
 def funcSyncContainerEnvFile() -> None:
   # Start with checking if vEnvDir is set.
-  if len(vEnvDir) != 0:
+  if len(vLocalEnvDir) != 0:
     # Get global variable.
     vCreateString: str = vGlobContainerCreateCmd
     # Check if --env-file is used.
@@ -723,13 +732,15 @@ def funcSyncContainerEnvFile() -> None:
       vClean02: str = re.sub(' .*', '', vClean01)
       # Return current path.
       vFile: str = vClean02
-      # Check if current path matches VEnvDir
+      # Check if current path matches VLocalEnvDir
       vContEnvFile: str = funcGetContainerEnvFilePath()
-      if vContEnvFile == vEnvDir:
+      if vContEnvFile == vLocalEnvDir:
         # Check to see if a file with same name already exist on both sides.
-        vCmdLine: str = "test -f " + vFile + " ; echo $?"
+        vCmdLocalFile: str = "test -f " + vFile + " ; echo $?"
+        vCmdSplitPath: tuple[str, str] = os.path.split(vFile)
+        vCmdRemoteFile: str = "test -f " + vRemoteEnvDir + "/" + vCmdSplitPath[1] + " ; echo $?"
         # Run the command on local server and get status.
-        vCmdData = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
+        vCmdData = subprocess.run(vCmdLocalFile, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
         if vCmdData[0].strip().decode("utf-8") == "1":
           print("No local ENV file found, exiting...")
           print(funcErrorMsg("container"))
@@ -737,16 +748,17 @@ def funcSyncContainerEnvFile() -> None:
         else:
           print("Local ENV file exists, continuing...")
         # Run the command on remote server and get status.
-        vRemoteStatus: list[str] = funcSftpCmdRL(vCmdLine, "Checking to see if ENV file already exist on remote server...")
+        vRemoteStatus: list[str] = funcSftpCmdRL(vCmdRemoteFile, "Checking to see if ENV file already exist on remote server...")
         vCleanRS: str = re.sub('\n', '', vRemoteStatus[1])
         if vCleanRS == "0":
           print("ENV file already exist on remote server, skipping sync...")
         elif vCleanRS == "1":
           print("ENV file do not exist on remote server...")
           # Sync env file to remote host.
-          funcSftpSend(vFile, "Sending ENV file to remote server...")
+          vRemoteFile: str = vRemoteEnvDir + "/" + vCmdSplitPath[1]
+          funcSftpSend(vFile, vRemoteFile, "Sending ENV file to remote server...")
       else:
-        print("vEnvDir:", vEnvDir)
+        print("vEnvDir:", vLocalEnvDir)
         print("Container:", vContEnvFile)
         print("Different sources for ENV file, container not matching vEnvDir variable, exiting...")
         print(funcErrorMsg("container"))
@@ -761,13 +773,13 @@ def funcSyncContainerSecret(vName: str) -> None:
   # Get global parameter
   vCreateString: str = vGlobContainerCreateCmd
   # Initialize variables.
-  vCmdLine: str = ''
+  #vCmdLine: str = ''
   vGetOption: str = ''
   print("Checking '" + vName + "' for secret(s)...")
   # Check to see if secret is used.
   if "--secret" in str(vCreateString):
     # check if vSecDir is set.
-    if len(vSecDir) != 0:
+    if len(vLocalSecDir) != 0:
       # List for secrets
       vAllSecrets: list[str] = []
       # Get every secret name from container
@@ -783,7 +795,7 @@ def funcSyncContainerSecret(vName: str) -> None:
       vSecRStatus: list[str] = []
       # Check to see if there are a secret file(s) for the container under vSecDir.
       for vSec in vAllSecrets:
-        vCmdLine = "test -f " + vSecDir + "/" + vSec + " ; echo $?"
+        vCmdLine: str = "test -f " + vLocalSecDir + "/" + vSec + " ; echo $?"
         vRunCmd = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         # Get return status.
         vSecRStatus.append(vRunCmd.stdout.decode("utf-8").strip())
@@ -808,17 +820,19 @@ def funcSyncContainerSecret(vName: str) -> None:
         # Iterate through all of the secrets, send and import them one by one.
         for vSec in vAllSecrets:
           # Check path on remote server.
-          vCmdLine = "test -d " + vSecDir + " ; echo $?"
-          vRemoteStatus: list[str] = funcSftpCmdRL(vCmdLine, "Checking that remote path exist and matches vSecDir parameter...")
+          vCmdLocalLine: str = "test -d " + vRemoteSecDir + " ; echo $?"
+          vRemoteStatus: list[str] = funcSftpCmdRL(vCmdLocalLine, "Checking that remote path exist and matches vSecDir parameter...")
           vCleanRS: str = re.sub('\n', '', vRemoteStatus[1])
           if vCleanRS == "0":
             # Send Secret file over to remote server.
-            vFilePath: str = vSecDir + "/" + vSec
-            funcSftpSend(vFilePath,"Sending secret..")
+            vCmdLocalFile: str = vLocalSecDir + "/" + vSec
+            vCmdRemoteFile: str = vRemoteSecDir + "/" + vSec
+
+            funcSftpSend(vCmdLocalFile, vCmdRemoteFile, "Sending secret..")
             # Import secret on remote server.
-            vCmdLine = "podman secret create " + vSec + " " + vSecDir + "/" + vSec
+            vCmdRemoteLine: str = "podman secret create " + vSec + " " + vRemoteSecDir + "/" + vSec
             # import secret into secret store.
-            vRemSecStatus: list[str] = funcSftpCmdRL(vCmdLine,"Creating secret on remote server...")
+            vRemSecStatus: list[str] = funcSftpCmdRL(vCmdRemoteLine,"Creating secret on remote server...")
             # Checking return status.
             if vRemSecStatus[0] != "0":
               print("Could not create the following secret:", vSec)
@@ -849,7 +863,7 @@ def funcSyncContainerSecret(vName: str) -> None:
             exit(1)
     else:
       # When vSecDir is not set.
-      print("Container is using --secret parameter(s) but vSecDir is not set.")
+      print("Container is using --secret parameter(s) but vLocalSecDir is not set.")
       print("You can choose to continue, ignoring secret sync, this is ok only IF you already")
       print("have created the secret on the destination server, otherwise the container will fail to start.")
       print("To continue without syncing secret choose [y] or choose [n] to halt migration.\n")
@@ -1024,7 +1038,6 @@ def funcSyncPod() -> None:
     vRemoteStatus: list[str] = funcSftpCmdRS(vCreateCmd, "Creating pod on remote server...")
     if vRemoteStatus[0] != "0":
       print("Could not create pod, command, error:\n", vRemoteStatus[1])
-      print(funcErrorMsg("pod"))
       exit(1)
   except:
     print("Cannot sync pod, exiting...")
