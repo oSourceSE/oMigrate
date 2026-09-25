@@ -4,8 +4,8 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.7                                                #
-# Date: 2025-09-24                                              #
+# Version: 1.3.8                                                #
+# Date: 2025-09-25                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
 # Command: pip3 install paramiko                                #
@@ -700,38 +700,60 @@ def funcVolSendRestore(vName: str, vType: str) -> None:
 def funcGetContainerEnvFilePath() -> str:
   # Initialize variable
   vReturn: str = ""
+  vClean01: str = ""
+  vClean02: str = ""
+  vFile: str = ""
   # Do the work.
   vCntCreateString: str = vGlobContainerCreateCmd
-  if "--env-file" in str(vCntCreateString):
+  if "--env-file " in str(vCntCreateString):
     # Clean the env path.
-    vClean01: str = re.sub('.*env\\-file ', '', vCntCreateString)
-    vClean02: str = re.sub(' .*', '', vClean01)
-    # Split and create a list
-    vList: list[str] = vClean02.split("/")
-    # Remove first index in list.
-    del vList[0]
-    # Get length of list and subtract 1
-    vLength: int = len(vList) - 1
-    # Remove last index in list.
-    del vList[vLength]
-    # Merge list back to one string.
-    vReturn = "/" + "/".join(vList)
+    vClean01 = re.sub('.*env\\-file ', '', vCntCreateString)
+    vClean02 = re.sub(' .*', '', vClean01)
+    vFile = vClean02
+  elif "--env-file=" in str(vCntCreateString):
+    # Clean the env path.
+    vClean01 = re.sub('.*env\\-file=', '', vCntCreateString)
+    vClean02 = re.sub(' .*', '', vClean01)
+    vFile = vClean02
+  # Split and create a list
+  vList: list[str] = vFile.split("/")
+  # Remove first index in list.
+  del vList[0]
+  # Get length of list and subtract 1
+  vLength: int = len(vList) - 1
+  # Remove last index in list.
+  del vList[vLength]
+  # Merge list back to one string.
+  vReturn = "/" + "/".join(vList)
   return vReturn
 
 ## Function - Check and sync env file if used.
 def funcSyncContainerEnvFile() -> None:
+  # Defining variables.
+  vClean01: str = ""
+  vClean02: str = ""
+  vFile: str = ""
   # Start with checking if vEnvDir is set.
   if len(vLocalEnvDir) != 0:
     # Get global variable.
     vCreateString: str = vGlobContainerCreateCmd
     # Check if --env-file is used.
     if "--env-file" in str(vCreateString):
+      # Show message.
       print("Container '" + funcPodGetCntName() + "' has ENV file...")
-      # Clean the env path.
-      vClean01: str = re.sub('.*env\\-file ', '', vCreateString)
-      vClean02: str = re.sub(' .*', '', vClean01)
-      # Return current path.
-      vFile: str = vClean02
+      # Check format on parameter.
+      if "--env-file " in str(vCreateString):
+        # Clean the env path.
+        vClean01 = re.sub('.*env\\-file ', '', vCreateString)
+        vClean02 = re.sub(' .*', '', vClean01)
+        # Return current path.
+        vFile = vClean02
+      elif "--env-file=" in str(vCreateString):
+        # Clean the env path.
+        vClean01 = re.sub('.*env\\-file=', '', vCreateString)
+        vClean02 = re.sub(' .*', '', vClean01)
+        # Return current path.
+        vFile = vClean02
       # Check if current path matches VLocalEnvDir
       vContEnvFile: str = funcGetContainerEnvFilePath()
       if vContEnvFile == vLocalEnvDir:
@@ -884,7 +906,7 @@ def funcSyncNetwork(vName: str) -> None:
   vRemoteStatus: list[str] = []
   vGetOption: str = ''
   # Check to see if the network option is used.
-  if '--network ' in vGlobContainerCreateCmd:
+  if '--network' in vGlobContainerCreateCmd:
     print("The container '" + vName + "' uses the --network option...")
     # Get network name.
     vClean01: str = re.sub('.*network ', '', vCreateString)
@@ -924,6 +946,8 @@ def funcSyncNetwork(vName: str) -> None:
           "if you created it with custom, ip-range, subnet mask and so on you need to\n",
           "manually create the network on the remote server before continuing.\n",
           "\n",
+          "IMPORTANT!!! The default network will always be created with --opt=isolate=1 as standard.\n",
+          "\n",
           "Choose [y] to let us create the network or choose [n] when you have\n",
           "manually created the network on the remote server to continue.",
           sep=''
@@ -934,7 +958,7 @@ def funcSyncNetwork(vName: str) -> None:
           vGlobNetworkName = vNetName
           # Create network
           vPrint: str = "\nCreating '" + vNetName + "' network on remote server..."
-          vCmdLine = "podman network create " + vNetName
+          vCmdLine = "podman network create " + vNetName + " --opt=isolate=1"
           vRemoteStatus = funcSftpCmdRL(vCmdLine, vPrint)
           if vRemoteStatus[1] == vNetName:
             print("Network created, continuing...\n")
