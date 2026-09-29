@@ -4,8 +4,8 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.8                                                #
-# Date: 2025-09-25                                              #
+# Version: 1.3.9                                                #
+# Date: 2025-09-29                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
 # Command: pip3 install paramiko                                #
@@ -29,6 +29,7 @@ vAcceptDisclaimer: str = "No"  # Set to Yes to not show the disclaimer, but plea
 
 ## Module Import
 from datetime import datetime
+from re import Match
 import subprocess
 import argparse
 import paramiko
@@ -402,29 +403,39 @@ def funcContainerExistRemote(vName: str, vLoop: str) -> int:
 
 ## Function - Get container create command.
 def funcGetCntCreateCmd(vName: str) -> str:
-  # Initialize variable.
+  # Initialize variables and lists.
+  vCleanedData: str = ""
   vReturn: str = ""
   # Do the work.
   try:
-    vCmdLine: str = "podman container inspect " + vName + " --format {{.Config.CreateCommand}}"
-    vCmdData = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
-    for vCntCreate in vCmdData:
-      vClean01: str = re.sub('\\[', '', vCntCreate.decode("utf-8").strip())
-      vClean02: str = re.sub(']', '', vClean01)
-      # Change "run" to "create" and remove "--detach"
-      vClean03: str = vClean02.replace("run", "create")
-      vClean04: str = vClean03.replace(" --detach", "")
+    # Run command and store the result.
+    vCmdLine: str = "podman container inspect " + vName + " --format='{{json .Config.CreateCommand}}'"
+    vCmdData: list[bytes] = subprocess.run(vCmdLine, shell=True, stdout=subprocess.PIPE).stdout.splitlines()
+    # Convert & clean json data.
+    for vClean in vCmdData:
+      vCleanStart: str = re.sub('\\[', '', vClean.decode("utf-8").strip())
+      vCleanedData = re.sub(']', '', vCleanStart)
+    # Fix --health-cmd and add single quotes.
+    vGetHealth: Match[str] | None = re.search(r'--health-cmd=.+?(?=")', vCleanedData)
+    if vGetHealth is not None:
+      vGetHealthCmd: str = vGetHealth.group()
+      vHealthFixStart: str = re.sub("--health-cmd=", "--health-cmd='", vGetHealthCmd)
+      vHealthFixEnd: str = vHealthFixStart + "'" #re.sub('"', '\'"', vHealthFixStart)
+      vCleanedData = vCleanedData.replace(vGetHealthCmd, vHealthFixEnd)
+    # Change "run" to "create"
+    if '"run"' in vCleanedData:
+      vCleanedData = vCleanedData.replace('"run"', '"create"')
+    #  Remove "--detach"
+    if '--detach' in vCleanedData:
+      vCleanedData = vCleanedData.replace('"--detach",', "")
       # Fix for custom sh start command with $ in them.
-      vClean05: str = vClean04.replace('sh -c ', 'sh -c "')
-      vClean06: str = vClean05.replace(r'$', r'\$')
-      # Add the final " at the end only if...
-      if "sh -c" in vClean06:
-        vClean07: str = vClean06 + '"'
-        # Output.
-        vReturn = vClean07
-      else:
-        # Output.
-        vReturn = vClean06
+      if '"sh -c"' in vCleanedData:
+        vCleanedData = vCleanedData.replace("sh -c ", "'sh -c '")
+    # Finally clean up to create the actual command to run.
+    vCleanedData = vCleanedData.replace('","', ' ')
+    vCleanedData = vCleanedData.replace('"', '')
+    # Output.
+    vReturn = vCleanedData
   except:
     print("Cannot get create command, exiting...")
     print(funcErrorMsg("container"))
@@ -472,14 +483,14 @@ def funcGetCntVolName(vName: str) -> list[str]:
 
 ## Function - Sync container between servers.
 def funcSyncContainer(vName: str, vLoop: int) -> list[str]:
-  # Initialize list..
+  # Initialize lists.
   vReturn: list[str] = []
   # Do the work.
   try:
     print("Getting container '" + vName + "' create command...")
     vCreateOrgCmd: str = vGlobContainerCreateCmd
     vCreateNewCmd: str = vCreateOrgCmd.replace(vLocalEnvDir, vRemoteEnvDir)
-    # Run the remote command and get result..
+    # Run the remote command and get result.
     vMessage: str = "Creating container '" + vName + "' on remote server..."
     vRemoteStatus: list[str] = funcSftpCmdRS(vCreateNewCmd, vMessage)
     # Check return status.
@@ -992,14 +1003,14 @@ def funcPodExistLocal(vName: str) -> None:
 ## Function - Pod exist on remote server.
 def funcPodExistRemote(vName: str) -> None:
   vCmdLine: str = "podman pod inspect " + vName + " --format {{.Name}}"
-  vRemoteStatus: list[str] = funcSftpCmdRL(vCmdLine, "Checking to see if container already exist on remote server...")
+  vRemoteStatus: list[str] = funcSftpCmdRL(vCmdLine, "Checking to see if pod already exist on remote server...")
   if vRemoteStatus[0] != "0":
     if vRemoteStatus[1].strip() == vName:
       print("Pod already exist on remote server, exiting...")
       print(funcErrorMsg("pod"))
       exit(1)
     else:
-      print("Container do not seem to exist on remote server, continuing...")
+      print("Pod do not seem to exist on remote server, continuing...")
 
 ## Function - Get pod create command.
 def funcGetPodCreateCmd(vName: str) -> str:
