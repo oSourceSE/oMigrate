@@ -4,7 +4,7 @@
 # Pod & Container migration script written in python.           #
 # Home: https://www.osource.se/                                 #
 # Author: Marcus Uddenhed                                       #
-# Version: 1.3.9                                                #
+# Version: 1.4.0                                                #
 # Date: 2025-09-29                                              #
 # License: BSDL                                                 #
 # Requirements: paramiko for SFTP                               #
@@ -428,9 +428,10 @@ def funcGetCntCreateCmd(vName: str) -> str:
     #  Remove "--detach"
     if '--detach' in vCleanedData:
       vCleanedData = vCleanedData.replace('"--detach",', "")
-      # Fix for custom sh start command with $ in them.
-      if '"sh -c"' in vCleanedData:
-        vCleanedData = vCleanedData.replace("sh -c ", "'sh -c '")
+    # Fix for custom sh start command with $ in them.
+    if '"/bin/sh","-c"' in vCleanedData:
+      vCleanedData = vCleanedData.replace('"/bin/sh","-c","', '"/bin/sh","-c","\'')
+      vCleanedData = vCleanedData + "'"
     # Finally clean up to create the actual command to run.
     vCleanedData = vCleanedData.replace('","', ' ')
     vCleanedData = vCleanedData.replace('"', '')
