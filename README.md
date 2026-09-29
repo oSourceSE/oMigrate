@@ -73,6 +73,19 @@ To run the script as an executable change the permission like this, make sure on
 chmod 770 path/to/the/script/oMigrate.py
 ```
 
+#### Secrets
+
+The script can migrate secrets if they are put into a file during the migration or pre created
+
+The file name must be the name of the secret that the container create command points to with `.tmp` as suffix and be placed into the path set in `vLocalSecDir` inside the script.
+
+Example:
+Secret is called: `MySuperSecret`
+
+File would be named: `MySuperSecret.tmp`
+
+Alternative you can pre create the secrets on the new server beforhand and thus eliminating storing secrets on file level, the script lets you continue if desired without the files existing locally.
+
 #### Usage
 
 The script has a couple of input parameters that is required every time the script is run.
